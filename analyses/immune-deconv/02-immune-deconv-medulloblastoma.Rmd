@@ -1,0 +1,204 @@
+---
+title: "02-immune-deconv-medulloblastoma"
+author: Chao Di, dichao83@gmail.com
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 3
+    number_sections: no
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE)
+```
+
+## Background
+**Problem 2**   
+Update the [immune-deconv module](https://github.com/rokitalab/OpenPedCan-Project-CNH/tree/dev/analyses/immune-deconv) to add an analysis which investigates whether there are differences in the immune cell composition in tumors with different medulloblastoma subtypes (WNT, SHH, Group3, and Group4). Generate at least one plot to show your findings.
+-	The histologies.tsv file includes information about the samples, biospecimen ids, cohorts, cancer group, molecular subtype, etc. A readme can be found in tab 1 of the excel file [here](https://github.com/rokitalab/OpenPedCan-Project-CNH/blob/dev/tables/results/SuppTable1-Histologies.xlsx).  
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+## Load results from `01-immune-deconv.R` {.tabset}
+**Analyze results from two methods `quanTIseq` and `xCell`**
+
+### quanTIseq
+
+"quanTIseq looks at fewer cell types, the scores can be interpreted as absolute fractions, thereby allowing comparison both across samples and cell types, [as described](https://omnideconv.org/immunedeconv/articles/immunedeconv.html#interpretation-of-scores).
+
+#### Show cell type fractions for each sample
+```{r}
+quantiseq_deconv <- readRDS("results/quantiseq_output.rds")
+quantiseq_MB <- quantiseq_deconv %>% 
+  filter(cancer_group == "Medulloblastoma")
+
+quantiseq_MB %>% 
+  ggplot(aes(x = Kids_First_Biospecimen_ID, y = fraction, fill = cell_type)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ molecular_subtype, scales = "free_x") +
+  # scale_fill_manual(values = palette) +
+  scale_fill_brewer(palette = "Paired") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+```
+
+#### Average cell type fractions per molecular subtype  
+As there are so many samples for each molecular_subtype, use average cell type composition per subtype 
+```{r}
+quantiseq_MB %>% 
+  group_by(molecular_subtype, cell_type) %>%
+  summarise(mean_fraction = mean(fraction, na.rm = TRUE)) %>%
+  ggplot(aes(x = molecular_subtype, y = mean_fraction, fill = cell_type)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  # scale_fill_manual(values = palette) +
+  scale_fill_brewer(palette = "Paired") +
+  theme_minimal()
+```
+
+#### Heatmap  
+```{r}
+# Prepare matrix
+heatmap_matrix <- quantiseq_MB %>%
+  select(Kids_First_Biospecimen_ID, cell_type, fraction) %>%
+  pivot_wider(names_from = Kids_First_Biospecimen_ID, values_from = fraction, values_fill = 0) %>%
+  column_to_rownames("cell_type")
+
+# Get molecular subtype per sample
+annotation_col <- quantiseq_MB %>%
+  distinct(Kids_First_Biospecimen_ID, molecular_subtype) %>%
+  column_to_rownames("Kids_First_Biospecimen_ID")
+
+# Reorder columns by molecular_subtype
+sample_order <- annotation_col %>%
+  arrange(molecular_subtype) %>%
+  rownames()
+heatmap_matrix <- heatmap_matrix[, sample_order]
+
+# Draw heatmap
+pheatmap(as.matrix(heatmap_matrix),
+         scale = "none",
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         annotation_col = annotation_col,
+         color = colorRampPalette(brewer.pal(9, "YlGnBu"))(100),
+         show_colnames = FALSE,
+         fontsize_row = 8,
+         main = "Immune Cell Fraction Heatmap")
+```
+
+#### Boxplot  
+**Compare sample cell type factions across molecular subtypes per cell type**  
+```{r}
+quantiseq_MB %>%
+  ggplot(aes(x = molecular_subtype, y = fraction, fill = molecular_subtype)) +
+  geom_boxplot() +  # remove dots for cleaner plots
+  facet_wrap(~ cell_type, scales = "free_y") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Cell Type Fractions Across Molecular Subtypes",
+    x = "Molecular Subtype",
+    y = "Cell Type Fraction"
+  )
+
+```
+
+
+**The observations are:**  
+
+1. Monocytes are significantly more abundant in Group 3 compared to the other groups.  
+2. Myeloid dendritic cells, NK cells, and CD4+ T cells (non-regulatory) are the predominant immune cell types across all four groups.  
+3. From boxplot:
+  - Myeloid dendritic cells are significantly lower in Group 3 compared to the other three groups.  
+  - CD8+ T cells are significantly higher in Group 3 and Group 4 compared to SHH and WNT.  
+  - Regulatory T cells are significantly higher in Group 4 and SHH compared to Group 3 and WNT.  
+  - Monocytes are significantly more abundant in Group 3 than in the other groups, consistent with the previous observation.  
+
+### xCell
+
+"`xCell` scores may be compared between samples (inter-sample comparisons), but _may not_ be compared across cell types or cancer types, as described in the [`immunedeconv` documentation](https://omnideconv.org/immunedeconv/articles/immunedeconv.html#interpretation-of-scores). "
+
+#### Heatmap
+**Don’t compare values across cell types/rows as xCell scores are only comparable across samples/columns**  
+```{r}
+
+xcell_deconv <- readRDS("results/xcell_output.rds")
+xcell_MB <- xcell_deconv %>% 
+  filter(cancer_group == "Medulloblastoma")
+
+# Prepare matrix
+heatmap_matrix <- xcell_MB %>%
+  select(Kids_First_Biospecimen_ID, cell_type, fraction) %>%
+  pivot_wider(names_from = Kids_First_Biospecimen_ID, values_from = fraction, values_fill = 0) %>%
+  column_to_rownames("cell_type")
+
+# Get molecular subtype per sample
+annotation_col <- xcell_MB %>%
+  distinct(Kids_First_Biospecimen_ID, molecular_subtype) %>%
+  column_to_rownames("Kids_First_Biospecimen_ID")
+
+# Reorder columns by molecular_subtype
+sample_order <- annotation_col %>%
+  arrange(molecular_subtype) %>%
+  rownames()
+heatmap_matrix <- heatmap_matrix[, sample_order]
+
+# Draw heatmap
+pheatmap(as.matrix(heatmap_matrix),
+         scale = "row",
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         annotation_col = annotation_col,
+         color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(100),
+         show_colnames = FALSE,
+         fontsize_row = 8,
+         main = "Immune Cell Fraction Heatmap")
+```
+
+**No clear cell type enrichment difference between the molecular subtypes from the Heatmap**  
+
+#### Boxplot  
+**Compare sample xCell enrichment scores across molecular subtypes per cell type**  
+```{r, fig.width=14, fig.height=10}
+xcell_MB %>%
+  ggplot(aes(x = molecular_subtype, y = fraction, fill = molecular_subtype)) +
+  geom_boxplot() +
+  facet_wrap(~ cell_type, scales = "free_y") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Cell Type Enrichment Across Molecular Subtypes",
+    x = "Molecular Subtype",
+    y = "xCell Score"
+  )
+
+```
+
+
+**Observations from boxplot:**  
+  - B cell plasma are significantly higher in Group 3 and 4 compared to SHH and WNT;   
+  - Cancer associated fibroblast are significantly higher in SSH and WNT compared to Group 3 and Group 4;  
+  - Hamtopoietic stem cells are significantly lower in Group 4 compared to the other groups;  
+  - Myeloid dendritic cell activated are significantly higher in SHH compared to the other groups;  
+  - T cell CD4+ Th1 and T cell NK are significantly higher in Group 3 compared to the other groups;  
+
+
+
